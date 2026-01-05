@@ -1,0 +1,7 @@
+# Sample URLs for testing
+# Visit https://www.chosun.com/opinion/editorial/ to find actual article URLs
+# Format: one URL per line
+
+# Example (replace with real URLs):
+# https://www.chosun.com/opinion/editorial/2025/01/05/ARTICLE_ID_HERE/
+# https://www.chosun.com/opinion/editorial/2025/01/04/ARTICLE_ID_HERE/
