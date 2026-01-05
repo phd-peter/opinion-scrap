@@ -13,14 +13,61 @@ from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 
 
-class ChosunEditorialScraper:
-    def __init__(self, output_dir='articles'):
-        self.base_url = 'https://www.chosun.com/opinion/editorial/'
-        self.output_dir = output_dir
+class KoreanEditorialScraper:
+    def __init__(self, site_name, base_url, output_dir='articles'):
+        self.site_name = site_name
+        self.base_url = base_url
+        self.output_dir = os.path.join(output_dir, site_name)
         self.driver = None
         
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+        # Site-specific configurations
+        self.configs = {
+            'chosun': {
+                'link_pattern': '/opinion/editorial/',
+                'title_selectors': ['h1', {'tag': ['h1', 'h2'], 'class': ['title', 'headline']}],
+                'date_selectors': ['time', {'class': 'date'}],
+                'author_selectors': [{'class': 'author'}],
+                'content_selectors': ['article', {'class': ['article', 'content', 'body']}],
+                'url_depth': 6
+            },
+            'joongang': {
+                'link_pattern': '/opinion/editorial/',
+                'title_selectors': ['h1', {'class': 'headline'}],
+                'date_selectors': ['time', {'class': ['date', 'published']}],
+                'author_selectors': [{'class': 'author'}, {'class': 'byline'}],
+                'content_selectors': ['article', {'class': ['article_body', 'article-content']}],
+                'url_depth': 5
+            },
+            'donga': {
+                'link_pattern': '/news/Opinion/',
+                'title_selectors': ['h1', {'class': 'title'}],
+                'date_selectors': ['time', {'class': ['date', 'input_date']}],
+                'author_selectors': [{'class': 'author'}, {'class': 'reporter'}],
+                'content_selectors': ['article', {'class': ['article_txt', 'article_content']}],
+                'url_depth': 5
+            },
+            'hani': {
+                'link_pattern': '/arti/opinion/editorial/',
+                'title_selectors': ['h4', {'class': 'title'}, {'tag': 'h3'}],
+                'date_selectors': ['p', {'class': 'date-time'}],
+                'author_selectors': [{'class': 'author'}, {'class': 'reporter_name'}],
+                'content_selectors': ['div', {'class': ['article-text', 'text']}],
+                'url_depth': 5
+            },
+            'khan': {
+                'link_pattern': '/opinion/editorial/',
+                'title_selectors': ['h1', {'class': 'title'}],
+                'date_selectors': ['p', {'class': 'date'}],
+                'author_selectors': [{'class': 'author'}],
+                'content_selectors': ['div', {'class': ['article_body', 'content']}],
+                'url_depth': 6
+            }
+        }
+        
+        self.config = self.configs.get(site_name, self.configs['chosun'])
+        
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
     
     def setup_driver(self):
         chrome_options = Options()
@@ -42,15 +89,17 @@ class ChosunEditorialScraper:
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
         
         article_links = set()
+        pattern = self.config['link_pattern']
+        min_depth = self.config['url_depth']
         
         for link in soup.find_all('a', href=True):
             href = link['href']
             
-            if '/opinion/editorial/' in href and href != self.base_url:
+            if pattern in href and href != self.base_url:
                 if not href.startswith('http'):
                     href = urljoin(self.base_url, href)
                 
-                if href.count('/') >= 6 and any(year in href for year in ['2024', '2025', '2023']):
+                if href.count('/') >= min_depth and any(year in href for year in ['2024', '2025', '2023']):
                     article_links.add(href)
         
         print(f"Found {len(article_links)} article links")
@@ -69,45 +118,10 @@ class ChosunEditorialScraper:
         
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
         
-        title = ''
-        title_tag = soup.find('h1')
-        if title_tag:
-            title = title_tag.get_text(strip=True)
-        
-        if not title:
-            title_tags = soup.find_all(['h1', 'h2'], class_=lambda x: x and ('title' in str(x).lower() or 'headline' in str(x).lower()))
-            if title_tags:
-                title = title_tags[0].get_text(strip=True)
-        
-        date = ''
-        date_tag = soup.find('time')
-        if date_tag:
-            date = date_tag.get('datetime', '') or date_tag.get_text(strip=True)
-        
-        if not date:
-            date_tags = soup.find_all(class_=lambda x: x and 'date' in str(x).lower())
-            if date_tags:
-                date = date_tags[0].get_text(strip=True)
-        
-        author = ''
-        author_tag = soup.find(class_=lambda x: x and 'author' in str(x).lower())
-        if author_tag:
-            author = author_tag.get_text(strip=True)
-        
-        content_paragraphs = []
-        
-        article_body = soup.find('article') or soup.find('div', class_=lambda x: x and ('article' in str(x).lower() or 'content' in str(x).lower() or 'body' in str(x).lower()))
-        
-        if article_body:
-            for p in article_body.find_all(['p', 'div'], class_=lambda x: not x or 'ad' not in str(x).lower()):
-                text = p.get_text(strip=True)
-                if text and len(text) > 20 and '©' not in text and 'copyright' not in text.lower():
-                    content_paragraphs.append(text)
-        else:
-            for p in soup.find_all('p'):
-                text = p.get_text(strip=True)
-                if text and len(text) > 30:
-                    content_paragraphs.append(text)
+        title = self._extract_title(soup)
+        date = self._extract_date(soup)
+        author = self._extract_author(soup)
+        content_paragraphs = self._extract_content(soup)
         
         return {
             'title': title,
@@ -116,6 +130,117 @@ class ChosunEditorialScraper:
             'content': content_paragraphs,
             'url': url
         }
+    
+    def _extract_title(self, soup):
+        title = ''
+        
+        for selector in self.config['title_selectors']:
+            if isinstance(selector, str):
+                tag = soup.find(selector)
+                if tag:
+                    title = tag.get_text(strip=True)
+                    break
+            elif isinstance(selector, dict):
+                if 'tag' in selector and 'class' in selector:
+                    tags = selector['tag']
+                    classes = selector['class']
+                    if isinstance(tags, str):
+                        tags = [tags]
+                    if isinstance(classes, str):
+                        classes = [classes]
+                    
+                    for tag_name in tags:
+                        for class_name in classes:
+                            elements = soup.find_all(tag_name, class_=lambda x: x and class_name in str(x).lower())
+                            if elements:
+                                title = elements[0].get_text(strip=True)
+                                return title
+                elif 'tag' in selector:
+                    tags = selector['tag'] if isinstance(selector['tag'], list) else [selector['tag']]
+                    for tag_name in tags:
+                        tag = soup.find(tag_name)
+                        if tag:
+                            title = tag.get_text(strip=True)
+                            return title
+                elif 'class' in selector:
+                    classes = selector['class'] if isinstance(selector['class'], list) else [selector['class']]
+                    for class_name in classes:
+                        elements = soup.find_all(class_=lambda x: x and class_name in str(x).lower())
+                        if elements:
+                            title = elements[0].get_text(strip=True)
+                            return title
+        
+        return title
+    
+    def _extract_date(self, soup):
+        date = ''
+        
+        for selector in self.config['date_selectors']:
+            if selector == 'time':
+                tag = soup.find('time')
+                if tag:
+                    date = tag.get('datetime', '') or tag.get_text(strip=True)
+                    break
+            elif selector == 'p':
+                tag = soup.find('p', class_=lambda x: x and 'date' in str(x).lower())
+                if tag:
+                    date = tag.get_text(strip=True)
+                    break
+            elif isinstance(selector, dict) and 'class' in selector:
+                classes = selector['class'] if isinstance(selector['class'], list) else [selector['class']]
+                for class_name in classes:
+                    elements = soup.find_all(class_=lambda x: x and class_name in str(x).lower())
+                    if elements:
+                        date = elements[0].get_text(strip=True)
+                        return date
+        
+        return date
+    
+    def _extract_author(self, soup):
+        author = ''
+        
+        for selector in self.config['author_selectors']:
+            if isinstance(selector, dict) and 'class' in selector:
+                classes = selector['class'] if isinstance(selector['class'], list) else [selector['class']]
+                for class_name in classes:
+                    elements = soup.find_all(class_=lambda x: x and class_name in str(x).lower())
+                    if elements:
+                        author = elements[0].get_text(strip=True)
+                        return author
+        
+        return author
+    
+    def _extract_content(self, soup):
+        content_paragraphs = []
+        article_body = None
+        
+        for selector in self.config['content_selectors']:
+            if selector == 'article':
+                article_body = soup.find('article')
+                if article_body:
+                    break
+            elif isinstance(selector, dict) and 'class' in selector:
+                classes = selector['class'] if isinstance(selector['class'], list) else [selector['class']]
+                for class_name in classes:
+                    article_body = soup.find('div', class_=lambda x: x and class_name in str(x).lower())
+                    if article_body:
+                        break
+        
+        if not article_body:
+            article_body = soup.find('div', class_=lambda x: x and any(term in str(x).lower() for term in ['article', 'content', 'body']))
+        
+        if article_body:
+            for p in article_body.find_all(['p', 'div'], class_=lambda x: not x or 'ad' not in str(x).lower()):
+                text = p.get_text(strip=True)
+                if text and len(text) > 20 and '©' not in text and 'copyright' not in text.lower() and 'advertisement' not in text.lower():
+                    content_paragraphs.append(text)
+        else:
+            for p in soup.find_all('p'):
+                text = p.get_text(strip=True)
+                if text and len(text) > 30 and '©' not in text and any(c.isalnum() for c in text):
+                    content_paragraphs.append(text)
+        
+        return content_paragraphs
     
     def save_to_markdown(self, article_data):
         if not article_data['title']:
